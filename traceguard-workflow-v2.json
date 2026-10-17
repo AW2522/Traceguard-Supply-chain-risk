@@ -1,0 +1,729 @@
+{
+  "name": "TraceGuard v2 - Data Table",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "TraceGuard Supplier Intake",
+        "formDescription": "Upload a supplier list (CSV) or a supplier document (PDF), or just type the supplier details.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Supplier Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Country of Origin"
+            },
+            {
+              "fieldLabel": "Additional Details",
+              "fieldType": "textarea"
+            },
+            {
+              "fieldLabel": "Submitter Email",
+              "fieldType": "email"
+            },
+            {
+              "fieldLabel": "Supplier File",
+              "fieldType": "file",
+              "acceptFileTypes": ".csv,.pdf",
+              "multipleFiles": false
+            }
+          ]
+        },
+        "responseMode": "onReceived",
+        "options": {
+          "respondWithOptions": {
+            "values": {
+              "respondWith": "text",
+              "formSubmittedText": "Thank you. Your submission is under automated screening. You can close this page."
+            }
+          },
+          "path": "traceguard-intake"
+        },
+        "path": "traceguard-intake"
+      },
+      "id": "127e0985-a94f-4663-be98-439fdcc437c8",
+      "name": "Intake Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "cc536b2b-b5d3-4b6c-8a86-4fc1e3e11629"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Finds the uploaded file (whatever the form field is called) and normalises it to binary \"data\".\nconst item = $input.first();\nconst j = item.json;\nconst get = (k) => (j[k] !== undefined && j[k] !== null) ? String(j[k]).trim() : '';\nconst out = {\n  supplierName: get('Supplier Name'),\n  country: get('Country of Origin'),\n  details: get('Additional Details'),\n  submitterEmail: get('Submitter Email'),\n  submittedAt: new Date().toISOString(),\n  ext: 'none', fileName: '', mimeType: ''\n};\nconst bin = item.binary || {};\nconst keys = Object.keys(bin);\nconst result = { json: out };\nif (keys.length) {\n  const b = bin[keys[0]];\n  const name = String(b.fileName || '').toLowerCase();\n  const mime = String(b.mimeType || '').toLowerCase();\n  let ext = name.includes('.') ? name.split('.').pop() : '';\n  if (!ext) { if (mime.includes('pdf')) ext = 'pdf'; else if (mime.includes('csv')) ext = 'csv'; }\n  out.ext = ext; out.fileName = b.fileName || ''; out.mimeType = b.mimeType || '';\n  result.binary = { data: b };\n}\nreturn [result];\n"
+      },
+      "id": "c50214f7-5035-4689-aeb5-add0b2f84aa9",
+      "name": "Detect File",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "257af738-a6c8-416f-bbf5-1a45a9d0f79d",
+                    "leftValue": "={{ $json.ext }}",
+                    "rightValue": "csv",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "CSV"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "8a283c21-e497-4889-8b01-5243eab08c88",
+                    "leftValue": "={{ $json.ext }}",
+                    "rightValue": "pdf",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "PDF"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "TEXT ONLY"
+        }
+      },
+      "id": "28dfed9d-b118-43eb-a986-accc328c02b7",
+      "name": "File Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "csv",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "e38d6646-e49a-488a-9c7f-510cd81b9ab4",
+      "name": "Extract CSV",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        680,
+        180
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "0aed88b2-bc86-446f-ba38-9189e1d2ca8f",
+      "name": "Extract PDF",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        680,
+        320
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Scores the submission. CSV = one score per row (case score = highest). PDF = whole text. Text-only = form fields.\n// !! WATCHLIST below is a DEMO list. Replace it with the official DHS UFLPA Entity List before real use.\nconst meta = $('Detect File').first().json;\nconst rows = $input.all().map(i => i.json).filter(r => r && Object.keys(r).length);\n\nconst WATCHLIST = ['hoshine silicon','xinjiang daqo','xinjiang production and construction corps','xpcc','changji esquel','xinjiang gcl'];\nconst REGION_RE = /\\b(xinjiang|xuar|uyghur|uighur|east turkestan|kashgar|hotan|aksu|turpan|urumqi|shihezi|korla|karamay|changji)\\b/i;\nconst COMMODITY_RE = /\\b(cotton|tomato(es)?|polysilicon|silicon|pvc|aluminum|aluminium|seafood|textiles?|apparel|viscose)\\b/i;\nconst GAP_RE = /(unknown origin|origin unknown|unverified|no documentation|not traceable|subcontract|third[- ]party sourced)/i;\nconst CHINA_RE = /\\b(china|prc|cn)\\b/i;\n\nfunction score(text, country){\n  let s = 0; const flags = []; const t = String(text || '');\n  for (const w of WATCHLIST) {\n    const re = new RegExp('\\\\b' + w.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&') + '\\\\b', 'i');\n    if (re.test(t)) { s += 60; flags.push('Watchlist match: ' + w); }\n  }\n  if (REGION_RE.test(t)) { s += 45; flags.push('Xinjiang / high-risk region reference'); }\n  if (COMMODITY_RE.test(t)) { s += 15; flags.push('UFLPA high-priority commodity'); }\n  if (GAP_RE.test(t)) { s += 10; flags.push('Traceability gap language'); }\n  if (CHINA_RE.test(String(country || ''))) { s += 10; flags.push('Origin: China'); }\n  return { score: Math.min(100, s), flags };\n}\n\nconst base = score([meta.supplierName, meta.details].join(' | '), meta.country);\nlet max = base.score;\nconst allFlags = new Set(base.flags);\nconst findings = [];\nlet rowCount = 0, pages = 0;\n\nif (meta.ext === 'csv') {\n  rowCount = rows.length;\n  for (const r of rows) {\n    const keys = Object.keys(r);\n    const nameKey = keys.find(k => /supplier|vendor|company|name/i.test(k));\n    const ctryKey = keys.find(k => /country|origin|region/i.test(k));\n    const res = score(Object.values(r).join(' | '), ctryKey ? r[ctryKey] : '');\n    if (res.score > 0) {\n      findings.push({ entity: nameKey ? String(r[nameKey]) : '(row)', score: res.score, flags: res.flags });\n      res.flags.forEach(f => allFlags.add(f));\n      max = Math.max(max, res.score);\n    }\n  }\n} else if (meta.ext === 'pdf') {\n  const text = rows[0] && rows[0].text ? String(rows[0].text) : '';\n  pages = rows[0] && rows[0].numpages ? rows[0].numpages : 0;\n  const res = score(text, meta.country);\n  if (res.score > 0) {\n    findings.push({ entity: 'PDF: ' + meta.fileName, score: res.score, flags: res.flags });\n    res.flags.forEach(f => allFlags.add(f));\n    max = Math.max(max, res.score);\n  }\n}\nfindings.sort((a, b) => b.score - a.score);\nconst riskLevel = max >= 70 ? 'HIGH' : max >= 40 ? 'MEDIUM' : 'LOW';\nreturn [{ json: {\n  ...meta, rowCount, pages,\n  findings: findings.slice(0, 25), findingsTotal: findings.length,\n  flags: Array.from(allFlags), score: max, riskLevel,\n  needsReview: max >= 40\n} }];\n"
+      },
+      "id": "b9e8b798-1df3-4cb6-a779-2f03f7effcde",
+      "name": "Analyze & Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "68da87e0-cc5e-4f46-b803-72fe72827114",
+              "name": "reviewUrl",
+              "value": "={{ $execution.resumeFormUrl }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "15034b3b-f97a-4860-b2c1-3cdf0b5720d1",
+      "name": "Attach Review URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1140,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "options": {},
+        "returnAll": true
+      },
+      "id": "dfb8dc42-1d90-4614-b863-876b9af73b19",
+      "name": "Load Log (intake)",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        1360,
+        300
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "function sha256(ascii){\n  function rightRotate(v,a){return (v>>>a)|(v<<(32-a));}\n  var maxWord=Math.pow(2,32), result='', words=[], asciiBitLength=ascii.length*8;\n  var hash=[], k=[], primeCounter=0, isComposite={};\n  for(var candidate=2;primeCounter<64;candidate++){\n    if(!isComposite[candidate]){\n      for(var i=0;i<313;i+=candidate) isComposite[i]=candidate;\n      hash[primeCounter]=(Math.pow(candidate,.5)*maxWord)|0;\n      k[primeCounter++]=(Math.pow(candidate,1/3)*maxWord)|0;\n    }\n  }\n  ascii+='\\x80';\n  while(ascii.length%64-56) ascii+='\\x00';\n  for(var i=0;i<ascii.length;i++){\n    var j=ascii.charCodeAt(i);\n    if(j>>8) return;\n    words[i>>2]|=j<<((3-i)%4)*8;\n  }\n  words[words.length]=((asciiBitLength/maxWord)|0);\n  words[words.length]=(asciiBitLength);\n  for(var j=0;j<words.length;){\n    var w=words.slice(j,j+=16);\n    var oldHash=hash;\n    hash=hash.slice(0,8);\n    for(var i=0;i<64;i++){\n      var w15=w[i-15], w2=w[i-2];\n      var a=hash[0], e=hash[4];\n      var temp1=hash[7]+(rightRotate(e,6)^rightRotate(e,11)^rightRotate(e,25))+((e&hash[5])^((~e)&hash[6]))+k[i]+(w[i]=(i<16)?w[i]:(w[i-16]+(rightRotate(w15,7)^rightRotate(w15,18)^(w15>>>3))+w[i-7]+(rightRotate(w2,17)^rightRotate(w2,19)^(w2>>>10)))|0);\n      var temp2=(rightRotate(a,2)^rightRotate(a,13)^rightRotate(a,22))+((a&hash[1])^(a&hash[2])^(hash[1]&hash[2]));\n      hash=[(temp1+temp2)|0].concat(hash);\n      hash[4]=(hash[4]+temp1)|0;\n    }\n    for(var i=0;i<8;i++) hash[i]=(hash[i]+oldHash[i])|0;\n  }\n  for(var i=0;i<8;i++) for(var j=3;j+1;j--){var b=(hash[i]>>(j*8))&255; result+=((b<16)?0:'')+b.toString(16);}\n  return result;\n}\n\nconst GENESIS = '0'.repeat(64);\nfunction hashEntry(e){\n  const s = [e.prevHash, e.seq, e.ts, e.caseId, e.action, e.actor, e.detail, JSON.stringify(e.data || null)].join('|');\n  return sha256(unescape(encodeURIComponent(s)));\n}\nfunction readEvents(rows){\n  const ev = [];\n  for (const r of rows) {\n    const p = r.json && r.json.payload;\n    if (!p) continue;\n    try { ev.push(JSON.parse(p)); } catch (x) {}\n  }\n  ev.sort((a, b) => a.seq - b.seq);\n  return ev;\n}\nfunction makeEvent(events, o){\n  const prev = events.length ? events[events.length - 1] : null;\n  const e = { seq: (prev ? prev.seq : 0) + 1, ts: new Date().toISOString(), caseId: o.caseId, action: o.action, actor: o.actor, detail: String(o.detail || ''), prevHash: prev ? prev.hash : GENESIS, data: o.data || null };\n  e.hash = hashEntry(e);\n  events.push(e);\n  return e;\n}\n\nconst events = readEvents($input.all());\nconst d = $('Attach Review URL').first().json;\nconst caseId = 'TG-' + $execution.id;\nconst review = !!d.needsReview;\nconst now = new Date().toISOString();\nconst snap = {\n  caseId, supplier: d.supplierName || '(unnamed)', country: d.country || '',\n  score: d.score, riskLevel: d.riskLevel, flags: d.flags || [], findingsTotal: d.findingsTotal || 0,\n  fileName: d.fileName || '', submitterEmail: d.submitterEmail || '',\n  status: review ? 'pending' : 'auto_approved', reviewUrl: review ? (d.reviewUrl || '') : '',\n  decision: review ? '' : 'approved', decidedBy: review ? '' : 'system (auto)', justification: '',\n  createdAt: now, decidedAt: review ? '' : now\n};\nconst out = [];\nout.push(makeEvent(events, { caseId, action: 'SUBMITTED', actor: 'intake-form', detail: 'score ' + d.score + ' (' + d.riskLevel + ') file=' + (d.fileName || 'none'), data: snap }));\nif (review) out.push(makeEvent(events, { caseId, action: 'SENT_TO_REVIEW', actor: 'system', detail: 'awaiting compliance officer', data: { status: 'pending' } }));\nelse out.push(makeEvent(events, { caseId, action: 'AUTO_APPROVED', actor: 'system', detail: 'score below review threshold', data: { status: 'auto_approved', decision: 'approved', decidedBy: 'system (auto)', decidedAt: now } }));\nreturn out.map(e => ({ json: { payload: JSON.stringify(e) } }));\n"
+      },
+      "id": "12e31889-cdb0-474c-b170-429492f4384c",
+      "name": "Register Case",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "options": {},
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": null,
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "25c708da-68bd-4379-93e9-a1b04096ce5d",
+      "name": "Save Events",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        1800,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a3525876-28cf-4b6c-8114-6ceb8f92f200",
+              "leftValue": "={{ $('Analyze & Score').first().json.needsReview }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "fd19786b-284d-450b-a631-2e1f8852083b",
+      "name": "Needs Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2020,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "318cc58f-8704-41dc-ab4f-3d125260eaa0",
+      "name": "Auto-Approved (end)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2260,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "form",
+        "formTitle": "TraceGuard Compliance Review",
+        "formDescription": "=Case TG-{{ $execution.id }} | Supplier: {{ $('Analyze & Score').first().json.supplierName }} | Risk score: {{ $('Analyze & Score').first().json.score }} ({{ $('Analyze & Score').first().json.riskLevel }}) | Flags: {{ ($('Analyze & Score').first().json.flags || []).join('; ') }}",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Approve"
+                  },
+                  {
+                    "option": "Block"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Reviewer Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Justification",
+              "fieldType": "textarea",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "dda238e5-0ee8-4d7a-a1ce-82da575f51c1",
+      "name": "Human Review (Wait)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2260,
+        200
+      ],
+      "webhookId": "dfcca324-4748-4e46-87f7-cf0ef4c112f8"
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "options": {},
+        "returnAll": true
+      },
+      "id": "7ee7c6e8-c93d-4666-8a2c-8cb76d6f54f6",
+      "name": "Load Log (decision)",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        2480,
+        200
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "function sha256(ascii){\n  function rightRotate(v,a){return (v>>>a)|(v<<(32-a));}\n  var maxWord=Math.pow(2,32), result='', words=[], asciiBitLength=ascii.length*8;\n  var hash=[], k=[], primeCounter=0, isComposite={};\n  for(var candidate=2;primeCounter<64;candidate++){\n    if(!isComposite[candidate]){\n      for(var i=0;i<313;i+=candidate) isComposite[i]=candidate;\n      hash[primeCounter]=(Math.pow(candidate,.5)*maxWord)|0;\n      k[primeCounter++]=(Math.pow(candidate,1/3)*maxWord)|0;\n    }\n  }\n  ascii+='\\x80';\n  while(ascii.length%64-56) ascii+='\\x00';\n  for(var i=0;i<ascii.length;i++){\n    var j=ascii.charCodeAt(i);\n    if(j>>8) return;\n    words[i>>2]|=j<<((3-i)%4)*8;\n  }\n  words[words.length]=((asciiBitLength/maxWord)|0);\n  words[words.length]=(asciiBitLength);\n  for(var j=0;j<words.length;){\n    var w=words.slice(j,j+=16);\n    var oldHash=hash;\n    hash=hash.slice(0,8);\n    for(var i=0;i<64;i++){\n      var w15=w[i-15], w2=w[i-2];\n      var a=hash[0], e=hash[4];\n      var temp1=hash[7]+(rightRotate(e,6)^rightRotate(e,11)^rightRotate(e,25))+((e&hash[5])^((~e)&hash[6]))+k[i]+(w[i]=(i<16)?w[i]:(w[i-16]+(rightRotate(w15,7)^rightRotate(w15,18)^(w15>>>3))+w[i-7]+(rightRotate(w2,17)^rightRotate(w2,19)^(w2>>>10)))|0);\n      var temp2=(rightRotate(a,2)^rightRotate(a,13)^rightRotate(a,22))+((a&hash[1])^(a&hash[2])^(hash[1]&hash[2]));\n      hash=[(temp1+temp2)|0].concat(hash);\n      hash[4]=(hash[4]+temp1)|0;\n    }\n    for(var i=0;i<8;i++) hash[i]=(hash[i]+oldHash[i])|0;\n  }\n  for(var i=0;i<8;i++) for(var j=3;j+1;j--){var b=(hash[i]>>(j*8))&255; result+=((b<16)?0:'')+b.toString(16);}\n  return result;\n}\n\nconst GENESIS = '0'.repeat(64);\nfunction hashEntry(e){\n  const s = [e.prevHash, e.seq, e.ts, e.caseId, e.action, e.actor, e.detail, JSON.stringify(e.data || null)].join('|');\n  return sha256(unescape(encodeURIComponent(s)));\n}\nfunction readEvents(rows){\n  const ev = [];\n  for (const r of rows) {\n    const p = r.json && r.json.payload;\n    if (!p) continue;\n    try { ev.push(JSON.parse(p)); } catch (x) {}\n  }\n  ev.sort((a, b) => a.seq - b.seq);\n  return ev;\n}\nfunction makeEvent(events, o){\n  const prev = events.length ? events[events.length - 1] : null;\n  const e = { seq: (prev ? prev.seq : 0) + 1, ts: new Date().toISOString(), caseId: o.caseId, action: o.action, actor: o.actor, detail: String(o.detail || ''), prevHash: prev ? prev.hash : GENESIS, data: o.data || null };\n  e.hash = hashEntry(e);\n  events.push(e);\n  return e;\n}\n\nconst events = readEvents($input.all());\nconst f = $('Human Review (Wait)').first().json;\nconst caseId = 'TG-' + $execution.id;\nconst decision = String(f['Decision'] || '').toLowerCase().startsWith('b') ? 'blocked' : 'approved';\nconst reviewer = String(f['Reviewer Name'] || 'unknown');\nconst why = String(f['Justification'] || '');\nconst e = makeEvent(events, { caseId, action: decision === 'blocked' ? 'BLOCKED' : 'APPROVED', actor: reviewer, detail: why.slice(0, 200),\n  data: { status: decision, decision, decidedBy: reviewer, justification: why, decidedAt: new Date().toISOString(), reviewUrl: '' } });\nreturn [{ json: { payload: JSON.stringify(e) } }];\n"
+      },
+      "id": "ceb8a57c-32e3-4eb7-9878-ca3efb0dd440",
+      "name": "Record Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2700,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "options": {},
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": null,
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "2698492a-6182-4f85-a5f8-384553d1c047",
+      "name": "Save Decision",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        2920,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "traceguard-queue",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "509ab029-c451-4b60-b679-106fc0162ca6",
+      "name": "Dashboard Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        760
+      ],
+      "webhookId": "62de76aa-fc6c-4659-840e-79e29293fb32"
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "options": {},
+        "returnAll": true
+      },
+      "id": "c076a593-fba0-415a-960c-1167ac682a99",
+      "name": "Load Log (dashboard)",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        240,
+        760
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "function sha256(ascii){\n  function rightRotate(v,a){return (v>>>a)|(v<<(32-a));}\n  var maxWord=Math.pow(2,32), result='', words=[], asciiBitLength=ascii.length*8;\n  var hash=[], k=[], primeCounter=0, isComposite={};\n  for(var candidate=2;primeCounter<64;candidate++){\n    if(!isComposite[candidate]){\n      for(var i=0;i<313;i+=candidate) isComposite[i]=candidate;\n      hash[primeCounter]=(Math.pow(candidate,.5)*maxWord)|0;\n      k[primeCounter++]=(Math.pow(candidate,1/3)*maxWord)|0;\n    }\n  }\n  ascii+='\\x80';\n  while(ascii.length%64-56) ascii+='\\x00';\n  for(var i=0;i<ascii.length;i++){\n    var j=ascii.charCodeAt(i);\n    if(j>>8) return;\n    words[i>>2]|=j<<((3-i)%4)*8;\n  }\n  words[words.length]=((asciiBitLength/maxWord)|0);\n  words[words.length]=(asciiBitLength);\n  for(var j=0;j<words.length;){\n    var w=words.slice(j,j+=16);\n    var oldHash=hash;\n    hash=hash.slice(0,8);\n    for(var i=0;i<64;i++){\n      var w15=w[i-15], w2=w[i-2];\n      var a=hash[0], e=hash[4];\n      var temp1=hash[7]+(rightRotate(e,6)^rightRotate(e,11)^rightRotate(e,25))+((e&hash[5])^((~e)&hash[6]))+k[i]+(w[i]=(i<16)?w[i]:(w[i-16]+(rightRotate(w15,7)^rightRotate(w15,18)^(w15>>>3))+w[i-7]+(rightRotate(w2,17)^rightRotate(w2,19)^(w2>>>10)))|0);\n      var temp2=(rightRotate(a,2)^rightRotate(a,13)^rightRotate(a,22))+((a&hash[1])^(a&hash[2])^(hash[1]&hash[2]));\n      hash=[(temp1+temp2)|0].concat(hash);\n      hash[4]=(hash[4]+temp1)|0;\n    }\n    for(var i=0;i<8;i++) hash[i]=(hash[i]+oldHash[i])|0;\n  }\n  for(var i=0;i<8;i++) for(var j=3;j+1;j--){var b=(hash[i]>>(j*8))&255; result+=((b<16)?0:'')+b.toString(16);}\n  return result;\n}\n\nconst GENESIS = '0'.repeat(64);\nfunction hashEntry(e){\n  const s = [e.prevHash, e.seq, e.ts, e.caseId, e.action, e.actor, e.detail, JSON.stringify(e.data || null)].join('|');\n  return sha256(unescape(encodeURIComponent(s)));\n}\nfunction readEvents(rows){\n  const ev = [];\n  for (const r of rows) {\n    const p = r.json && r.json.payload;\n    if (!p) continue;\n    try { ev.push(JSON.parse(p)); } catch (x) {}\n  }\n  ev.sort((a, b) => a.seq - b.seq);\n  return ev;\n}\nfunction makeEvent(events, o){\n  const prev = events.length ? events[events.length - 1] : null;\n  const e = { seq: (prev ? prev.seq : 0) + 1, ts: new Date().toISOString(), caseId: o.caseId, action: o.action, actor: o.actor, detail: String(o.detail || ''), prevHash: prev ? prev.hash : GENESIS, data: o.data || null };\n  e.hash = hashEntry(e);\n  events.push(e);\n  return e;\n}\n\nconst events = readEvents($input.all());\nconst cMap = {};\nfor (const e of events) { if (e.data) cMap[e.caseId] = Object.assign(cMap[e.caseId] || { caseId: e.caseId }, e.data); }\nconst sd = { log: events };\nconst esc = s => String(s == null ? '' : s).replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));\nconst cases = Object.values(cMap).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));\nconst pending = cases.filter(c => c.status === 'pending');\nlet intact = true, brokenAt = null;\nsd.log.forEach((e, i) => {\n  const bad = hashEntry(e) !== e.hash || (i > 0 && e.prevHash !== sd.log[i-1].hash);\n  if (bad && intact) { intact = false; brokenAt = e.seq; }\n});\nconst badge = l => '<span class=\"b ' + esc(String(l).toLowerCase()) + '\">' + esc(l || '-') + '</span>';\nconst stat = (c, s) => cases.filter(x => x.status === s).length;\nconst pendRows = pending.map(c => {\n  const link = /^https?:\\/\\//.test(c.reviewUrl || '') ? '<a class=\"btn\" target=\"_blank\" rel=\"noopener\" href=\"' + esc(c.reviewUrl) + '\">Review &rarr;</a>' : 'n/a';\n  return '<tr><td>' + esc(c.caseId) + '</td><td>' + esc(c.supplier) + '</td><td>' + esc(c.country) + '</td><td>' + esc(c.score) + '</td><td>' + badge(c.riskLevel) + '</td><td>' + esc((c.flags || []).join('; ')) + '</td><td>' + link + '</td></tr>';\n}).join('');\nconst caseRows = cases.map(c => '<tr><td>' + esc(c.caseId) + '</td><td>' + esc(c.supplier) + '</td><td>' + esc(c.score) + '</td><td>' + badge(c.riskLevel) + '</td><td>' + esc(c.status) + '</td><td>' + esc(c.decidedBy || '') + '</td><td>' + esc((c.createdAt || '').slice(0, 19).replace('T', ' ')) + '</td></tr>').join('');\nconst logRows = sd.log.slice().reverse().slice(0, 100).map(e => '<tr><td>' + esc(e.seq) + '</td><td>' + esc(e.ts.slice(0, 19).replace('T', ' ')) + '</td><td>' + esc(e.caseId) + '</td><td>' + esc(e.action) + '</td><td>' + esc(e.actor) + '</td><td class=\"h\">' + esc(e.hash.slice(0, 16)) + '&hellip;</td><td class=\"h\">' + esc(e.prevHash.slice(0, 16)) + '&hellip;</td></tr>').join('');\nconst html = '<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta http-equiv=\"refresh\" content=\"20\"><title>TraceGuard Review Queue</title><style>' +\n 'body{font-family:system-ui,Segoe UI,Arial,sans-serif;margin:0;background:#0f172a;color:#e2e8f0}header{padding:20px 28px;background:#111c3a;border-bottom:1px solid #1e293b}h1{margin:0;font-size:22px}h2{margin:28px 0 10px;font-size:16px;color:#93c5fd}main{padding:0 28px 40px}' +\n '.cards{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}.card{background:#1e293b;border-radius:10px;padding:12px 18px;min-width:120px}.card b{display:block;font-size:24px}' +\n 'table{width:100%;border-collapse:collapse;background:#1e293b;border-radius:8px;overflow:hidden;font-size:13px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid #334155;vertical-align:top}th{background:#273449;color:#94a3b8}' +\n '.b{padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700}.high{background:#7f1d1d;color:#fecaca}.medium{background:#78350f;color:#fde68a}.low{background:#14532d;color:#bbf7d0}' +\n '.btn{background:#2563eb;color:#fff;padding:4px 10px;border-radius:6px;text-decoration:none}.h{font-family:monospace;color:#94a3b8}.ok{color:#4ade80}.bad{color:#f87171}.muted{color:#64748b;font-size:12px}</style></head><body>' +\n '<header><h1>TraceGuard &mdash; UFLPA Review Queue</h1><div class=\"muted\">Auto-refreshes every 20s &middot; generated ' + esc(new Date().toISOString().slice(0, 19).replace('T', ' ')) + ' UTC &middot; ' + events.length + ' log events loaded</div></header><main>' +\n '<div class=\"cards\"><div class=\"card\"><b>' + pending.length + '</b>Pending review</div><div class=\"card\"><b>' + stat(0, 'approved') + '</b>Approved</div><div class=\"card\"><b>' + stat(0, 'blocked') + '</b>Blocked</div><div class=\"card\"><b>' + stat(0, 'auto_approved') + '</b>Auto-approved</div>' +\n '<div class=\"card\"><b class=\"' + (intact ? 'ok' : 'bad') + '\">' + (intact ? 'INTACT' : 'BROKEN @' + brokenAt) + '</b>Decision-log hash chain</div></div>' +\n '<h2>Pending human review</h2><table><tr><th>Case</th><th>Supplier</th><th>Country</th><th>Score</th><th>Risk</th><th>Flags</th><th>Action</th></tr>' + (pendRows || '<tr><td colspan=\"7\">Nothing pending.</td></tr>') + '</table>' +\n '<h2>All cases</h2><table><tr><th>Case</th><th>Supplier</th><th>Score</th><th>Risk</th><th>Status</th><th>Decided by</th><th>Created (UTC)</th></tr>' + (caseRows || '<tr><td colspan=\"7\">No cases yet.</td></tr>') + '</table>' +\n '<h2>Cryptographic decision log (SHA-256 chain, latest 100)</h2><table><tr><th>#</th><th>Time (UTC)</th><th>Case</th><th>Action</th><th>Actor</th><th>Hash</th><th>Prev hash</th></tr>' + (logRows || '<tr><td colspan=\"7\">Log empty.</td></tr>') + '</table>' +\n '</main></body></html>';\nreturn [{ json: { html } }];\n"
+      },
+      "id": "40777ee0-07d1-454e-81c4-bb0832f1dd0d",
+      "name": "Build Dashboard HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "c302a631-fb2d-4a70-8e87-893a05196035",
+      "name": "Respond HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## TraceGuard v2 (Data Table storage)\nCreate ONE data table named **tg_events** with ONE string column named **payload**.\nThen open each node named 'Load Log...' / 'Save ...' (5 nodes) and select that table.\nPublish (activate) and use the PRODUCTION urls.",
+        "height": 200,
+        "width": 460
+      },
+      "id": "9bfdd129-c4f7-45e6-90d4-9d52e9d52501",
+      "name": "Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        40
+      ]
+    }
+  ],
+  "connections": {
+    "Intake Form": {
+      "main": [
+        [
+          {
+            "node": "Detect File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect File": {
+      "main": [
+        [
+          {
+            "node": "File Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "File Type": {
+      "main": [
+        [
+          {
+            "node": "Extract CSV",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Analyze & Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract CSV": {
+      "main": [
+        [
+          {
+            "node": "Analyze & Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDF": {
+      "main": [
+        [
+          {
+            "node": "Analyze & Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze & Score": {
+      "main": [
+        [
+          {
+            "node": "Attach Review URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Review URL": {
+      "main": [
+        [
+          {
+            "node": "Load Log (intake)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Log (intake)": {
+      "main": [
+        [
+          {
+            "node": "Register Case",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Register Case": {
+      "main": [
+        [
+          {
+            "node": "Save Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Events": {
+      "main": [
+        [
+          {
+            "node": "Needs Review?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Review?": {
+      "main": [
+        [
+          {
+            "node": "Human Review (Wait)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Auto-Approved (end)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Human Review (Wait)": {
+      "main": [
+        [
+          {
+            "node": "Load Log (decision)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Log (decision)": {
+      "main": [
+        [
+          {
+            "node": "Record Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Decision": {
+      "main": [
+        [
+          {
+            "node": "Save Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dashboard Webhook": {
+      "main": [
+        [
+          {
+            "node": "Load Log (dashboard)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Log (dashboard)": {
+      "main": [
+        [
+          {
+            "node": "Build Dashboard HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Dashboard HTML": {
+      "main": [
+        [
+          {
+            "node": "Respond HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}
